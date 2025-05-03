@@ -38,7 +38,7 @@ int create_process(int (*pfun)()) {
         sp--;
         *sp = 0;
     }   
-    *(sp+30) = (uint64_t) pfun;
+    *(sp+32) = (uint64_t) pfun;
     PCB_t *pcb = alloc_pcb();
     if (pcb == NULL) return -1;
     pcb->sp = (uint64_t) sp;

@@ -10,22 +10,54 @@ int p4();
 
 void go();
 void dispatch();
+
 void setup_EVT();
 void init_timer();
 void enable_interrupts();
 void disable_interrupts();
 int get_el();
+void unsupported_handler();
+
 int main(void) {
- 
+
     create_process(p1);
     create_process(p2);
     create_process(p3);
     create_process(p4);
 
+    setup_EVT();
+    init_timer();
+
+    // enable_interrupts();
+
     go();
 
 	return 0;
 }
+
+// void unsupported_handler() {
+//     print_to(0, 0, "Error: unsupported exception!");
+//     while(1); // infinite loop
+// }
+
+
+void unsupported_handler() {
+    int el;
+    asm volatile ("mrs %0, CurrentEL" : "=r" (el));
+    el = (el >> 2) & 3;
+
+    // Manually convert EL to ASCII char
+    char msg[] = "Unsupported! EL = 0";
+    msg[19] = '0' + el;
+
+    print_to(0, 0, msg);
+    while (1);
+}
+
+void enable_interrupts() {
+    asm volatile("msr DAIFClr, #0x2");  // Enable IRQs
+}
+
 
 int p1() {
     box(9,23, 11, 39);
@@ -37,7 +69,6 @@ int p1() {
             hello[11] = '0';
         else 
             hello[11]++;
-        dispatch();
     }
     return 0;
 }
@@ -52,7 +83,6 @@ int p2() {
             hello[11] = '0';
         else 
             hello[11]++;
-        dispatch();
     }
     return 0;
 }
@@ -66,7 +96,6 @@ int p3() {
             hello[11] = '0';
         else 
             hello[11]++;
-        dispatch();
     }
     return 0;
 }
@@ -80,7 +109,6 @@ int p4() {
             hello[11] = '0';
         else 
             hello[11]++;
-        dispatch();
     }
     return 0;
 }
