@@ -1,0 +1,374 @@
+process_asm.S
+
+.global dispatch
+.global go
+.global setup_EVT
+.global init_timer
+.global clear_timer
+.global unsupported
+
+.extern ReadyQ
+.extern Running
+.extern unsupported_handler
+
+
+dispatch:
+    // Disable interrupts (DAIFSet = 0x2 disables IRQs)
+    msr     DAIFSet, #0x2
+
+    // Save x1 temporarily to EL1 stack
+    str     x1, [sp, -16]!
+
+    // Get process stack pointer from system register SP_EL0 into x1
+    mrs     x1, SP_EL0
+
+    // Make space for 17 16-byte entries (x0–x30, PSTATE, ELR)
+    sub     x1, x1, 16 * 17
+
+    // Save general purpose registers onto the process stack
+    stp     x0, x1, [sp, -16]!
+    ldr x0, [sp]
+    mov x2, x1
+    add x1, sp, 16
+    ldr x1, [x1]
+    stp x0, x1, [x2]
+    ldp x0, x1, [sp], 16
+
+    // store registers x2...x30 on the stack (using x1 as destion)
+    stp x2, x3, [x1, 16]
+    stp x4, x5, [x1, 16*2]
+    stp x6, x7, [x1, 16*3]
+    stp x8, x9, [x1, 16*4]
+    stp x10, x11, [x1, 16*5]
+    stp x12, x13, [x1, 16*6]
+    stp x14, x15, [x1, 16*7]
+    stp x16, x17, [x1, 16*8]
+    stp x18, x19, [x1, 16*9]
+    stp x20, x21, [x1, 16*10]
+    stp x22, x23, [x1, 16*11]
+    stp x24, x25, [x1, 16*12]
+    stp x26, x27, [x1, 16*13]
+    stp x28, x29, [x1, 16*14]
+    str x30, [x1, 16*15]
+
+    // Save PSTATE
+    mrs     x0, SPSR_EL1
+    str     x0, [x1, 16*15 + 8]
+
+    // Save Exception return address
+    mrs     x0, ELR_EL1
+    str     x0, [x1, 16*16]
+
+    // Save value of x1 into pcb
+    adr x0, ReadyQ  // take pointer to queue
+    adr x4, Running          // pointer to pcb
+    ldr x4, [x4]          // puts first value in pcb
+
+    // Restore saved x1 (was saved to EL1 stack)
+    str x1, [x4]     // store new stack pointer on stack
+    mov x1, x4       // move pcb pointer to x1 for enqueue
+
+    // Enqueue the current process
+
+    bl enqueue
+    b go  
+
+
+
+go:
+    // Dequeue the next process to run
+    adr     x0, ReadyQ              // dequeue has one argument, the address of the ready Q
+    bl      dequeue                 // call dequeue, x0 will have a ptr to the returned PCB
+    adr     x1, Running             // We need to set the returned PCB as "running"
+    str     x0, [x1]                // store the pointer to the PCB into the Running variable
+    ldr     x1, [x0]        // Load user stack pointer from PCB
+
+    
+    ldr     x0, [sp, 16*15+8]   // Restore PSTATE
+    msr     SPSR_EL1, x0
+
+    ldr x0, [x1, 16*16]
+    msr ELR_EL1, x0
+
+    //store new top of stack
+    mov x0, x1
+    add x0, x0, 16*17
+    msr SP_EL0, x0
+
+    // retore process registers
+    ldp     x2, x3, [x1, 16]
+    ldp     x4, x5, [x1, 16*2]
+    ldp     x6, x7, [x1, 16*3]
+    ldp     x8, x9, [x1, 16*4]
+    ldp     x10, x11, [x1, 16*5]
+    ldp     x12, x13, [x1, 16*6]
+    ldp     x14, x15, [x1, 16*7]
+    ldp     x16, x17, [x1, 16*8]
+    ldp     x18, x19, [x1, 16*9]
+    ldp     x20, x21, [x1, 16*10]
+    ldp     x22, x23, [x1, 16*11]
+    ldp     x24, x25, [x1, 16*12]
+    ldp     x26, x27, [x1, 16*13]
+    ldp     x28, x29, [x1, 16*14]
+
+    // temp save x0 and x1
+    stp x0, x1, [sp, -16]!
+
+    // clear counter and reset timer
+    bl clear_timer
+
+    // restore x0 and x1
+    ldp x0, x1, [sp], 16
+
+    // restore x30
+    ldr x30, [x1, 16*15]
+
+    //restore x0 and x1 (final registers?)
+    ldp x0, x1, [x1]
+
+    // enable interupts
+    msr DAIFClr, #0x2
+
+    eret
+
+// -----------------------------
+// setup_EVT: set VBAR_EL1
+// -----------------------------
+setup_EVT:
+    adr x0, vector_table
+    msr VBAR_EL1, x0
+    ret
+
+// -----------------------------
+// init_timer: route interrupt, enable timer
+// -----------------------------
+init_timer:
+    stp x29, x30, [sp, -16]!
+    bl clear_timer
+    ldr x0, =0x40000040
+    mov x1, 0x08
+    str w1, [x0]
+    mov x0, 1
+    msr CNTV_CTL_EL0, x0
+    ldp x29, x30, [sp], 16
+    ret
+
+// -----------------------------
+// clear_timer: set timer for 1/20 sec
+// -----------------------------
+clear_timer:
+    mrs x0, CNTFRQ_EL0
+    mov x1, 20
+    udiv x0, x0, x1
+    msr CNTV_TVAL_EL0, x0
+    ret
+
+// -----------------------------
+// unsupported: default trap handler
+// -----------------------------
+unsupported:
+    mov x0, #0
+    mov x1, #0
+    bl unsupported_handler
+    b .
+
+// -----------------------------
+// vector_table: interrupt vectors
+// -----------------------------
+; .align 7
+vector_table:
+    .balign 128
+        b unsupported
+    .balign 128
+        b dispatch
+    .balign 128
+        b unsupported
+    .balign 128
+        b unsupported
+    .balign 128
+        b unsupported
+    .balign 128
+        b dispatch    // yes
+    .balign 128
+        b unsupported
+    .balign 128
+        b unsupported
+    .balign 128
+        b unsupported
+    .balign 128
+        b dispatch
+    .balign 128
+        b unsupported
+    .balign 128
+        b unsupported
+    .balign 128
+        b unsupported
+    .balign 128
+        b dispatch
+    .balign 128
+        b unsupported
+    .balign 128
+        b unsupported 
+
+kernel.c
+
+#include "libos.h"
+#include "process.h"
+#include <stdbool.h>
+
+int box(unsigned int sr, unsigned int sc, unsigned int er, unsigned int ec);
+int p1();
+int p2();
+int p3(); 
+int p4();
+
+void go();
+void dispatch();
+
+void setup_EVT();
+void init_timer();
+void enable_interrupts();
+void disable_interrupts();
+int get_el();
+void unsupported_handler();
+
+int main(void) {
+
+    create_process(p1);
+    create_process(p2);
+    create_process(p3);
+    create_process(p4);
+
+    setup_EVT();
+    init_timer();
+
+    go();
+
+	return 0;
+}
+
+// void unsupported_handler() {
+//     print_to(0, 0, "Error: unsupported exception!");
+//     while(1); // infinite loop
+// }
+
+
+void unsupported_handler() {
+    int el;
+    asm volatile ("mrs %0, CurrentEL" : "=r" (el));
+    el = (el >> 2) & 3;
+
+    // Manually convert EL to ASCII char
+    char msg[] = "Unsupported! EL = 0";
+    msg[19] = '0' + el;
+
+    print_to(0, 0, msg);
+    while (1);
+}
+
+int p1() {
+    box(9,23, 11, 39);
+    char hello[] = "Process 1: 0";
+    while (1) {
+ 
+        print_to(10, 25, hello);
+        if (hello[11] == '9')
+            hello[11] = '0';
+        else 
+            hello[11]++;
+    }
+    return 0;
+}
+
+int p2() {
+    box(13,23, 15, 39);
+    char hello[] = "Process 2: 0";
+    print_to(14, 25, hello);
+    while (1) {
+        putc_to(14, 36, hello[11]);
+        if (hello[11] == '9')
+            hello[11] = '0';
+        else 
+            hello[11]++;
+    }
+    return 0;
+}
+
+int p3() {
+    box(9,49, 11, 65);
+    char hello[] = "Process 3: 0";
+    while (1) {
+        print_to(10, 51, hello);
+        if (hello[11] == '9')
+            hello[11] = '0';
+        else 
+            hello[11]++;
+    }
+    return 0;
+}
+
+int p4() {
+    box(13,49, 15, 65);
+    char hello[] = "Process 4: 0";
+    while (1) {
+        print_to(14, 51, hello);
+        if (hello[11] == '9')
+            hello[11] = '0';
+        else 
+            hello[11]++;
+    }
+    return 0;
+}
+
+process.c
+
+#include "process.h"
+#include "queue.h"
+
+PCB_t *Running = 0;
+PCB_Q_t ReadyQ;
+
+void notcalled() {Running = 0;}  // quickfix dummy function to remove 
+                                 //  warning the Running is not used
+                                 //  it is used in process_asm.S
+#define X30_OFFSET 30
+#define MAX_STACKS 10
+#define STACK_SIZE 2048
+#define NULL 0
+
+static uint64_t Stacks[MAX_STACKS][STACK_SIZE];
+static uint32_t Next_stack = 0;
+uint64_t *alloc_stack() {
+    if (Next_stack >= 10) return NULL;
+    return Stacks[Next_stack++];
+}
+
+#define MAX_PCBS 10
+static PCB_t Pcbs[MAX_PCBS];
+static uint32_t Next_pcb = 0;
+PCB_t *alloc_pcb() {
+    if (Next_pcb >= 10) return NULL;
+    return &(Pcbs[Next_pcb++]);
+}
+
+static uint32_t Next_process = 0;
+
+int create_process(int (*pfun)()) {
+    // create the stack
+    uint64_t *sp = alloc_stack();
+    if (sp == NULL) return -1;
+    sp += STACK_SIZE;
+    for (uint64_t i = 0; i < 33; i++) {
+        sp--;
+        *sp = 0;
+    }   
+    *(sp+32) = (uint64_t) pfun;
+    PCB_t *pcb = alloc_pcb();
+    if (pcb == NULL) return -1;
+    pcb->sp = (uint64_t) sp;
+    pcb->pid = Next_process++;
+    pcb->next = NULL;
+    enqueue(&ReadyQ, pcb);
+    return 0; 
+}
+
